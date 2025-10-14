@@ -1,0 +1,284 @@
+with multi as
+(
+    select cast(order_id as bigint) order_id, count(distinct forder_id) nb_parcels
+    from oms_mart.shopee_oms_vn_db__fulfillment_order_tab__vn_daily_s0_live
+    group by 1
+    having count(distinct forder_id) > 1
+)
+,sls_tracking as
+(select 
+   distinct slo_id log_id,
+   min(case when tracking_code = 'F000' then from_unixtime(actual_time-3600) else null end) as sls_received_time,
+   min(case when tracking_code in ('F001','F002','F100','F510','F420','F050','F097') then from_unixtime(actual_time-3600) else null end) as sls_first_pickup_attempt,
+   min(case when tracking_code in ('F100','F510','F420') then from_unixtime(actual_time-3600) else null end) as sls_pickup_done,
+   min(case when tracking_code in ('F650') then from_unixtime(actual_time-3600) else null end) as sls_first_delivery_pending,
+   min(case when tracking_code in ('F600','F650','F980','F668','F680') then from_unixtime(actual_time-3600) else null end) sls_first_delivery_attempt,
+   min(case when tracking_code in ('F980') then from_unixtime(actual_time-3600) else null end) as sls_delivery_done,
+   min(case when tracking_code in ('F668','F680') then from_unixtime(actual_time-3600) else null end) as sls_return_time,
+   min(case when tracking_code in ('F999','F998') then from_unixtime(actual_time-3600) else null end) as sls_del_failed,
+   min(case when tracking_code in ('F699') then from_unixtime(actual_time-3600) else null end) sls_return_pending,
+   min(case when tracking_code in ('F699','F999','F998') then from_unixtime(actual_time-3600) else null end) sls_first_return_attempt
+--    max(case when tracking_code in ('F650') then from_unixtime(actual_time-3600) else null end) as sls_del_pending_sub   
+    from sls_mart.shopee_ssc_lts_tracking_vn_db__logistic_tracking_tab__reg_continuous_s0_live sls 
+    group by 1
+)
+,delivery as
+(select  distinct order_id orderid
+                ,rt.slo_id log_id
+                ,oo.order_sn ordersn
+                ,rt.lm_tracking_number shipping_traceno
+                ,oo.fulfilment_shipping_carrier
+                ,rt.lm_tracking_number
+        ,rt.slo_tn consignment_no
+        ,rt.forderid
+        ,rt.actual_shipping_fee
+                ,case
+                when oo.logistics_status_id in (5) then from_unixtime(oo.complete_timestamp) else null end as be__delivered_time 
+        ,case
+                when cancel_reason in ('CANCEL_REASON_LOGISTICS_DELIVERY_FAILED','CANCEL_REASON_LOST_PARCEL') then from_unixtime(oo.cancel_timestamp) else null end as  be__delivery_failed_lost_time 
+        ,oo.logistics_status logistics_status
+                ,sls_received_time
+                ,sls_first_pickup_attempt
+                ,sls_pickup_done
+                ,sls_first_delivery_pending
+                ,sls_first_delivery_attempt
+                ,sls_delivery_done
+                ,sls_return_time
+                ,sls_del_failed
+                ,sls_return_pending
+                ,sls_first_return_attempt
+                ,from_unixtime(rd.pickup_time -3600)  fe_schedule_pickup ,CASE WHEN year(from_unixtime((rd.pickup_time - 3600))) > 1970 THEN 0 else 1 end is_dropoff
+            ,case when hour(sls_pickup_done) < 12 then date_trunc('day',(sls_pickup_done)) + interval '12' hour else date_trunc('day',(sls_pickup_done)) + interval '1' day end as adjusted_pickup
+                ,case when hour(sls_return_time) < 12 then date_trunc('day',(sls_return_time)) + interval '12' hour else date_trunc('day',(sls_return_time)) + interval '1' day end as adjusted_return
+
+                from mp_order.dwd_order_all_ent_df__vn_s0_live as oo
+                left join sls_mart.shopee_ssc_lfs_order_vn_db__logistic_order_tab__reg_continuous_s0_live rt on oo.order_sn = rt.ordersn
+                left join sls_tracking as sls
+                        on rt.slo_id = sls.log_id
+                left join sls_mart.shopee_ssc_lfs_order_vn_db__logistic_order_data_tab__reg_continuous_s0_live rd on rd.slo_id = rt.slo_id
+
+                where oo.grass_date >= date'2021-01-01' 
+        and DATE(from_unixtime(oo.create_timestamp - 3600)) >= date_trunc('month',current_date ) - interval '3' month
+        and oo.is_cb_shop = 0
+                and oo.fulfilment_channel_id = 50015 
+        )
+,base1 as(
+    select distinct
+      dd.orderid
+     ,case when m.order_id is not null then 1 else 0 end is_multi_parcel
+     ,dd.consignment_no as consignment
+     ,dd.ordersn
+     ,dd.shipping_traceno
+     ,dd.log_id
+     ,dd.fulfilment_shipping_carrier
+     ,o.shop_id shopid
+     ,o.seller_id seller_userid
+     ,o.buyer_id userid
+     ,dd.lm_tracking_number
+     ,o.buyer_paid_shipping_fee be_bpsf
+     ,o.estimate_shipping_fee be_esf
+     ,o.actual_shipping_fee be_asf
+     ,dd.actual_shipping_fee sls_asf
+
+     ,cast(oms.origin_shipping_fee as double)/100000 sls_esf
+     ,case when m.order_id is null then o.seller_shipping_address_state else w.state end seller_address_state
+     ,case when m.order_id is null then o.seller_shipping_address_city else w.city end seller_address_city
+     ,case when m.order_id is null then ol.extinfo.seller_address.district else w.district end seller_address_district
+     ,o.buyer_shipping_address_state buyer_address_state
+     ,o.buyer_shipping_address_city buyer_address_city
+     ,o.buyer_shipping_address_district buyer_address_district
+     ,from_unixtime(oms.arranged_time-3600) multi_parcel__arranged_time
+     ,from_unixtime(oms.delivered_time) multi_parcel__delivered_time
+     ,cast(json_extract_scalar(oms.attributes,'$.chargeable_weight') as double)/1000 order_weight
+     ,dd.be__delivered_time ,dd.be__delivery_failed_lost_time ,dd.logistics_status
+     ,dd.sls_received_time
+         ,dd.sls_first_pickup_attempt
+         ,dd.sls_pickup_done
+         ,dd.sls_first_delivery_pending
+         ,dd.sls_first_delivery_attempt
+         ,dd.sls_delivery_done
+         ,dd.sls_return_time
+         ,dd.sls_del_failed
+         ,dd.sls_return_pending
+         ,dd.sls_first_return_attempt
+         ,dd.fe_schedule_pickup
+         ,dd.is_dropoff
+         ,dd.adjusted_pickup
+         ,dd.adjusted_return
+     from delivery dd
+    join mp_order.dwd_order_all_ent_df__vn_s0_live o
+        on dd.orderid = o.order_id
+    left join multi m
+        on m.order_id = o.order_id
+    -- left join log_request_tab sls
+    --     on sls.ordersn = o.order_sn and sls.log_id = dd.log_id
+    left join oms_mart.shopee_oms_vn_db__fulfillment_order_tab__vn_daily_s0_live oms
+        on cast(oms.forder_id as varchar) = cast(dd.forderid as varchar)
+    left join oms_mart.shopee_oms_vn_db__warehouse_tab__vn_daily_s0_live w
+        on oms.whs_id = w.whs_id
+    left join marketplace.shopee_order_logistics_v2_db__order_logistics_v2_tab__vn_daily_s0_live ol
+        on o.order_id = ol.order_id
+
+    -- where ((date(dd.be__delivered_time) between date '2022-08-01' and date '2022-08-31')  ,be__delivered_time, be__delivery_failed_lost_time
+        -- or (date(dd.be__delivery_failed_lost_time) between date'2022-08-01' and date'2022-08-31' ))
+
+)
+
+, base2 as (
+    select  distinct b.*
+                        ,lower(concat (b.seller_address_state,'-',b.seller_address_city,'-',b.seller_address_district)) concat_seller_address
+                        ,lower(concat (b.buyer_address_state,'-',b.buyer_address_city,'-',b.buyer_address_district)) concat_buyer_address
+                        ,r.ship_from
+                        ,r.ship_to
+                        ,coalesce(cast(r.sla as double),0) + (case when seller_address_state = buyer_address_state then 1 else 1 end) as sla
+                        ,coalesce(cast(sl.pickup as double),0) pickup
+                        ,coalesce(cast(bl.intra as double),0) intra
+                        ,coalesce(cast (bl.inter as double),0) inter
+                        ,case when cast(exp_remote.added_leadtime as int) is not null then cast(exp_remote.added_leadtime as int) else 0 end as added_leadtime
+                        ,coalesce(cast(r.sla as double),0) + (case when seller_address_state = buyer_address_state then 1 else 1 end) + coalesce(cast (sl.pickup as double),0) + coalesce(cast ((case when b.seller_address_state = b.buyer_address_state then bl.intra else bl.inter end) as double),0) as total_sla
+
+                        ,cast(day_of_week(b.adjusted_pickup) as double) +1 as day_of_week_del
+                        ,floor(
+                          (cast(day_of_week(b.adjusted_pickup) as double)
+                        + cast(hour(b.adjusted_pickup) as double)/24
+                        + coalesce(cast(r.sla as double),0) + coalesce(cast (sl.pickup as double),0) + (case when seller_address_state = buyer_address_state then 1 else 1 end)
+                        + coalesce(cast ((case when b.seller_address_state = b.buyer_address_state then bl.intra else bl.inter end) as double),0) )/7.1) as delivery_w_weekend ,cast(date_diff('second',adjusted_pickup,coalesce(sls_first_delivery_attempt,sls_delivery_done)) as double)/3600/24 as del_leadtime
+                        ,cast(date_diff('second',adjusted_pickup,coalesce(sls_return_time,sls_delivery_done)) as double)/3600/24 as del_leadtime_toantrinh
+
+                        ,cast(day_of_week(b.adjusted_return) as double) +1 as day_of_week_return
+                        ,floor(
+                          (cast(day_of_week(b.adjusted_return) as double)
+                        + cast(hour(b.adjusted_return) as double)/24
+                        + coalesce(cast(r.sla as double),0) + coalesce(cast (sl.pickup as double),0) + (case when seller_address_state = buyer_address_state then 1 else 1 end)
+                        + coalesce(cast ((case when b.seller_address_state = b.buyer_address_state then bl.intra else bl.inter end) as double),0))/7.1) as return_w_weekend ,cast(date_diff('second',adjusted_return,coalesce(sls_first_return_attempt,sls_del_failed)) as double)/3600/24 as return_leadtime
+                        ,cast(date_diff('second',adjusted_return,sls_del_failed) as double)/3600/24 as return_leadtime_toantrinh
+
+                        ,coalesce(cast(d.nb_holiday as int),0) nb_delivery_holiday
+                        ,coalesce(cast(t.nb_holiday as int),0) nb_return_holiday
+                        ,coalesce(cast(d_o.nb_holiday as int),0) nb_delivery_holiday_overall
+                        ,coalesce(cast(t_o.nb_holiday as int),0) nb_return_holiday_overall
+        from base1 as b
+                left join vnbi_ops.vnp_area a
+                    on lower(b.buyer_address_state) = a.state and a.ingestion_timestamp = (select max(ingestion_timestamp) it  from vnbi_ops.vnp_area)
+                left join vnbi_ops.vnp_route r
+                    on lower(b.seller_address_state) = r.ship_from and a.area = r.ship_to and r.ingestion_timestamp = (select max(ingestion_timestamp) it from vnbi_ops.vnp_route)
+                left join vnbi_ops.vnp_exp_rural_lt sl  on lower(concat(b.seller_address_state,'-',b.seller_address_city,'-',b.seller_address_district)) = sl.address and sl.ingestion_timestamp = (select max(ingestion_timestamp) it from vnbi_ops.vnp_exp_rural_lt)
+                left join vnbi_ops.vnp_exp_rural_lt bl
+                    on lower(concat(b.buyer_address_state,'-',b.buyer_address_city,'-',b.buyer_address_district)) = bl.address and bl.ingestion_timestamp = (select max(ingestion_timestamp) it from vnbi_ops.vnp_exp_rural_lt)
+                left join vnbi_ops.shopee_vn_op_team__db_tpl_holiday d
+                        on b.fulfilment_shipping_carrier = d.shipping_carrier and d.shipping_carrier = 'VNPost Nhanh' and d.type = 'delivery' and (cast(d.holiday_start as date) between date(adjusted_pickup) and date_add ('hour',(case when seller_address_state = buyer_address_state then 1 else 1 end)*24 + (cast(cast(r.sla as double)*24 as int) + cast(cast (sl.pickup as double)*24 as int) + cast(cast ((case when b.seller_address_state = b.buyer_address_state then bl.intra else bl.inter end) as double)*24 as int) ) ,adjusted_pickup) ) and d.ingestion_timestamp = (select max(ingestion_timestamp) it from vnbi_ops.shopee_vn_op_team__db_tpl_holiday)
+                left join vnbi_ops.shopee_vn_op_team__db_tpl_holiday t
+                        on b.fulfilment_shipping_carrier = t.shipping_carrier and t.shipping_carrier = 'VNPost Nhanh' and t.type = 'return' and (cast(t.holiday_start as date) between date(adjusted_return) and date_add ('hour',(case when seller_address_state = buyer_address_state then 1 else 1 end)*24 + (cast(cast(r.sla as double)*24 as int) + cast(cast (sl.pickup as double)*24 as int) + cast(cast ((case when b.seller_address_state = b.buyer_address_state then bl.intra else bl.inter end) as double)*24 as int) ) ,adjusted_return) ) and t.ingestion_timestamp = (select max(ingestion_timestamp) it from vnbi_ops.shopee_vn_op_team__db_tpl_holiday)
+                left join vnbi_ops.shopee_vn_op_team__db_tpl_holiday d_o
+                        on b.fulfilment_shipping_carrier = d_o.shipping_carrier and d_o.shipping_carrier = 'VNPost Nhanh' and d_o.type = 'delivery' and (cast(d_o.holiday_start as date) between date(adjusted_pickup) and date_add ('day',11,date(adjusted_pickup)) ) and d_o.ingestion_timestamp = (select max(ingestion_timestamp) it from vnbi_ops.shopee_vn_op_team__db_tpl_holiday)
+                left join vnbi_ops.shopee_vn_op_team__db_tpl_holiday t_o
+                        on b.fulfilment_shipping_carrier = t_o.shipping_carrier and t_o.shipping_carrier = 'VNPost Nhanh' and t_o.type = 'return' and (cast(t_o.holiday_start as date) between date(adjusted_return) and date_add ('day',11,date(adjusted_return)) ) and t_o.ingestion_timestamp = (select max(ingestion_timestamp) it from vnbi_ops.shopee_vn_op_team__db_tpl_holiday)
+                left join vnbi_ops.shopee_vn_op_team__vnp_remote_exp exp_remote
+                        on exp_remote.buyer_address = lower(concat(b.buyer_address_state,'-',b.buyer_address_city)) and exp_remote.ingestion_timestamp = (select max(ingestion_timestamp) it from vnbi_ops.shopee_vn_op_team__vnp_remote_exp)
+
+)
+,tab_temp as
+(select *
+                ,case when date(sls_first_pickup_attempt) > date (fe_schedule_pickup) and is_dropoff = 0 then '50% trễ lấy-' else '' end is_delay_pickup
+                ,(b.total_sla + b.delivery_w_weekend + b.nb_delivery_holiday) as limit_leadtime_delivery
+                ,(b.total_sla + b.return_w_weekend + b.nb_return_holiday) as limit_leadtime_return
+                , (11 + nb_delivery_holiday + added_leadtime) as total_leadtime_toantrinh_giao
+                , (11 + nb_return_holiday + added_leadtime) as total_leadtime_toantrinh_hoan
+
+from base2 as b
+)
+
+,t as
+(select distinct tab_temp.*
+                ,case when del_leadtime > limit_leadtime_delivery then '50% trễ giao-' else '' end as is_delay_delivery
+                ,case when return_leadtime > limit_leadtime_return then '50% trễ hoàn-' else '' end as is_delay_return
+                ,case when del_leadtime_toantrinh > (11+ nb_delivery_holiday_overall + added_leadtime)  then '100% trễ giao-' else '' end as is_delay_delivery_overall
+                ,case when return_leadtime_toantrinh > (11+ nb_return_holiday_overall + added_leadtime)  then '100% trễ hoàn-' else '' end as is_delay_return_overall
+                from tab_temp
+)
+select distinct
+                 t.orderid
+                ,t.is_multi_parcel
+                ,t.consignment
+                ,t.ordersn
+                ,t.shipping_traceno
+                ,t.lm_tracking_number
+                ,t.log_id
+                ,t.fulfilment_shipping_carrier
+                ,t.shopid
+                ,t.seller_userid
+                ,t.userid
+                ,t.be_bpsf
+                ,t.be_esf
+                ,t.be_asf
+                ,t.sls_asf
+                ,t.sls_esf
+                ,t.seller_address_state
+                ,t.seller_address_city
+                ,t.seller_address_district
+                ,t.buyer_address_state
+                ,t.buyer_address_city
+                ,t.buyer_address_district
+                ,t.multi_parcel__arranged_time
+                ,t.multi_parcel__delivered_time
+                ,t.order_weight
+                ,t.be__delivered_time
+                ,t.be__delivery_failed_lost_time
+                ,t.day_of_week_del
+                ,t.day_of_week_return
+                ,t.logistics_status
+                ,t.added_leadtime
+                ,t.ship_from
+                ,t.ship_to
+                ,t.concat_seller_address
+                ,t.concat_buyer_address
+                ,t.sls_first_return_attempt
+                ,t.sls_first_delivery_attempt
+                ,t.total_sla
+                ,t.is_dropoff
+                ,t.sls_received_time
+                ,t.fe_schedule_pickup
+                ,t.sls_first_pickup_attempt
+                ,t.sls_pickup_done
+                ,t.adjusted_pickup
+                ,t.sls_first_delivery_pending
+                ,t.sls_delivery_done
+                ,t.sls_return_time
+                ,t.adjusted_return
+                ,t.sls_return_pending
+                ,t.sls_del_failed
+                ,t.sla
+                ,t.pickup
+                ,t.inter
+                ,t.intra
+                ,t.delivery_w_weekend
+                ,t.nb_delivery_holiday
+                ,0 as disaster
+                ,t.return_w_weekend
+                ,t.nb_return_holiday
+                ,t.limit_leadtime_delivery
+                ,t.del_leadtime
+                ,t.total_leadtime_toantrinh_giao
+                ,t.del_leadtime_toantrinh
+                ,t.limit_leadtime_return
+                ,t.return_leadtime
+                ,t.total_leadtime_toantrinh_hoan
+                ,t.return_leadtime_toantrinh
+                ,t.is_delay_pickup
+                ,t.is_delay_delivery
+                ,t.is_delay_delivery_overall
+                ,t.is_delay_return
+                ,t.is_delay_return_overall
+                ,concat(is_delay_pickup,is_final_delay_delivery,is_final_delay_return) as final_penalty
+        ,coalesce(be__delivered_time, be__delivery_failed_lost_time) filter_date
+from
+(select t.*
+                ,case when is_delay_delivery_overall = '100% trễ giao-' then is_delay_delivery_overall else is_delay_delivery end as is_final_delay_delivery
+                ,case when is_delay_return_overall = '100% trễ hoàn-' then is_delay_return_overall else is_delay_return end as is_final_delay_return
+        from t
+                where         is_delay_pickup = '50% trễ lấy-'
+                                or is_delay_delivery = '50% trễ giao-'
+                                or is_delay_return = '50% trễ hoàn-'
+                                or is_delay_delivery_overall = '100% trễ giao-'
+                                or is_delay_return_overall = '100% trễ hoàn-'
+                                ) as t
