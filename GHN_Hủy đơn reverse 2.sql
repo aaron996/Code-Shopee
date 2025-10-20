@@ -23,7 +23,7 @@ ORDER BY
   NgayTaoDon, LoaiDonHang;
 
 --
--- Export data reverse cancel
+-- Export data reverse cancel (SHEET 1 vùng note mã đơn cần hủy)
 SELECT 
   GS."OrderCode"
   ,clientid
