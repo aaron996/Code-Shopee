@@ -25,17 +25,16 @@ WHERE clientid = 224845
 
 -- code chạy mã đơn trong email
 
-SELECT 
-  GS."OrderCode"
-  ,clientid
-  ,DATE(enddeliverytime) AS "enddeliverytime"
-  ,DATE(lastdeliveredupdatedtime) AS "lastdeliveredupdatedtime"
-  ,currentstatus AS Status
-  ,numdeliver
-  ,numreturn
-  ,currentwh
-FROM "gsheet-data_input_from_external"."default"."input_customer_shopee" GS
-LEFT JOIN "ghn-reporting"."ka".dtm_ka_v3_createddate C
-  ON GS."OrderCode" = C.ordercode
-WHERE GS."OrderCode" IS NOT NULL
+SELECT
+    C.ordercode AS MaDH
+    ,S.clientid AS LoaiDonHang
+    ,DATE(C.orderdate) AS NgayTaoDon
+    ,C.currentstatus AS TrangThai
+    ,C.numpick AS SoLanLay
+  FROM "gsheet-data_input_from_external"."default"."input_customer_shopee" GS
+  JOIN "ghn-reporting"."ka"."dtm_ka_v3_createddate" C
+    ON C.ordercode = GS."OrderCode"
+  JOIN "ghn-reporting"."ka"."dtm_ka_shopee" AS S
+    ON C.ordercode = S.ordercode
+  WHERE GS."OrderCode" IS NOT NULL
 
