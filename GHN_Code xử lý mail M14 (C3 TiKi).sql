@@ -38,4 +38,7 @@ FROM "gsheet-data_input_from_external"."default"."input_customer_shopee" GS
 LEFT JOIN "ghn-reporting"."ka".dtm_ka_v3_createddate C
   ON GS."OrderCode" = C.ordercode
 WHERE GS."OrderCode" IS NOT NULL
+and c.clientid = 224845
+AND C.numdeliver IS NOT NULL
+and c.numdeliver >=1
 
