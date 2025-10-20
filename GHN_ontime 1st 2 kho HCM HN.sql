@@ -1,3 +1,4 @@
+-- check ontime PU 1st
 WITH
   Details AS (
     SELECT
@@ -28,8 +29,9 @@ WITH
       --AND DATE(C.orderdate) BETWEEN DATE_TRUNC('Month',CURRENT_DATE) AND CURRENT_DATE - INTERVAL '1' DAY
       AND DATE(c.orderdate) BETWEEN date_add('day', -7, CURRENT_DATE) AND date_add('day', -1, CURRENT_DATE)
       AND C.fromprovince  in ('Hà Nội','Hồ Chí Minh')
+      AND C.pickwarehouseid IN (1297,1327)
       --AND LOWER(pickwh) LIKE 'bưu cục%'
-      AND LOWER(pickwh) not LIKE 'bưu cục%'
+     -- AND LOWER(pickwh) not LIKE 'bưu cục%'
       
     GROUP BY 1, 2,3,4,5
   )
@@ -43,3 +45,34 @@ WITH
   FROM Details
   GROUP BY 1,2
   ORDER BY 1,2
+
+-- check ontime PU 1st
+
+WITH
+  Raw AS (
+    SELECT
+      fromwardcode AS Ward_id
+      ,clientcontactname AS Shop_Name
+      ,pickwh AS Warehouse
+      ,ordercode AS "Đơn đại diện"
+      ,row_number() OVER (PARTITION BY fromwardcode, clientcontactname ORDER BY DATE(orderdate) DESC) AS Rank_ordercode
+    FROM "ghn-reporting"."ka"."dtm_ka_v3_createddate"
+    WHERE 1 = 1
+      AND clientid = 18692
+      AND pickwarehouseid IN (1297,1327)
+      AND NOT channel = 'WH - Shopee'
+  )
+  SELECT
+    R.Ward_id
+    ,R.Shop_Name
+    ,R.Warehouse
+    ,R."Đơn đại diện"
+    ,W.region_shortname AS Region
+    ,W.province_name AS Province
+    ,W.district_name as District
+    ,W.ward_name AS Ward
+  FROM Raw AS R
+  JOIN "dw-ghn"."datawarehouse"."dim_location_ward" AS W
+    ON R.Ward_id = W.ward_id
+  WHERE 1 = 1
+    AND Rank_ordercode = 1
