@@ -240,3 +240,105 @@ WITH
     ON ND.Time = SD.Time AND ND.Region = SD.Region
   GROUP BY 1,2,3,4
   ORDER BY 2 ASC
+---------------------------------Vinh tự cook--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+WITH
+  Normal_Total AS (
+    SELECT
+      week(C.orderdate) AS Time --thay đổi sang Week/Month
+      ,COUNT(C.ordercode) AS Total_Volume
+    FROM dtm_ka_v3_createddate AS C
+    WHERE C.clientid IN (18692)
+      AND C.isexpecteddropoff = False
+      AND NOT C.channel = 'WH - Shopee'
+      AND DATE(C.orderdate) BETWEEN DATE('2025-08-01') AND DATE('2025-09-30')
+    GROUP BY 1
+  )
+, Normal_Details AS (
+    SELECT
+      week(C.orderdate) AS Time --thay đổi sang Week/Month
+      ,C.fromregionshortname AS Region
+      ,C.fromprovince as Province
+      ,c.fromdistrict as District
+      ,COUNT(C.ordercode) AS Volume_Created
+      ,SUM(
+          CASE
+            WHEN (HOUR(C.orderdate) < 18 AND DATE(COALESCE(C.firstupdatedpickeduptime, C.endpicktime, CURRENT_DATE)) <= DATE(C.orderdate))
+              OR (HOUR(C.orderdate) >= 18 AND DATE(COALESCE(C.firstupdatedpickeduptime, C.endpicktime, CURRENT_DATE)) <= DATE(C.orderdate + INTERVAL '1' DAY)) THEN 1
+            ELSE 0
+          END
+          ) AS OntimeFirstPU
+      ,SUM(
+          CASE
+            WHEN (HOUR(C.orderdate) < 18 AND DATE(COALESCE(C.firstupdatedpickeduptime, C.endpicktime, CURRENT_DATE)) <= DATE(C.orderdate))
+              OR (HOUR(C.orderdate) >= 18 AND DATE(COALESCE(C.firstupdatedpickeduptime, C.endpicktime, CURRENT_DATE)) <= DATE(C.orderdate + INTERVAL '1' DAY)) THEN 0
+            ELSE 1
+          END
+          ) AS LateFirstPU
+      ,SUM(
+          CASE
+            WHEN (HOUR(C.orderdate) < 18 AND DATE(C.endpicktime) <= DATE(C.orderdate)) 
+              OR (HOUR(C.orderdate) >= 18 AND COALESCE(DATE(C.endpicktime), CURRENT_DATE) <= DATE(C.orderdate + INTERVAL '1' DAY)) THEN 1
+            ELSE 0 
+          END
+          ) AS OntimeSuccessPU
+      ,SUM(
+          CASE
+            WHEN (HOUR(C.orderdate) < 18 AND DATE(C.endpicktime) <= DATE(C.orderdate)) 
+              OR (HOUR(C.orderdate) >= 18 AND COALESCE(DATE(C.endpicktime), CURRENT_DATE) <= DATE(C.orderdate + INTERVAL '1' DAY)) THEN 0
+            ELSE 1
+          END
+          ) AS LateSuccessPU
+      FROM dtm_ka_v3_createddate AS C
+      WHERE C.clientid IN (18692)
+        AND C.isexpecteddropoff = False
+        AND NOT C.channel = 'WH - Shopee'
+        AND DATE(C.orderdate) BETWEEN DATE('2025-08-01') AND DATE('2025-09-30')
+      GROUP BY 1,2,3,4
+  )
+, Sunday_Details AS (
+    SELECT
+      week(C.orderdate) AS Time --thay đổi sang Week/Month
+      --,C.fromregionshortname AS Region
+      ,c.fromdistrict as District
+      ,COUNT(C.ordercode) AS Volume_Created
+      ,SUM(
+          CASE
+            WHEN (HOUR(C.orderdate) < 18 AND DATE(COALESCE(C.firstupdatedpickeduptime, C.endpicktime, CURRENT_DATE)) <= DATE(C.orderdate))
+              OR (HOUR(C.orderdate) >= 18 AND DATE(COALESCE(C.firstupdatedpickeduptime, C.endpicktime, CURRENT_DATE)) <= DATE(C.orderdate + INTERVAL '1' DAY)) THEN 1
+            ELSE 0
+          END
+          ) AS OntimeFirstPU
+      ,SUM(
+          CASE
+            WHEN (HOUR(C.orderdate) < 18 AND DATE(COALESCE(C.firstupdatedpickeduptime, C.endpicktime, CURRENT_DATE)) <= DATE(C.orderdate))
+              OR (HOUR(C.orderdate) >= 18 AND DATE(COALESCE(C.firstupdatedpickeduptime, C.endpicktime, CURRENT_DATE)) <= DATE(C.orderdate + INTERVAL '1' DAY)) THEN 0
+            ELSE 1
+          END
+          ) AS LateFirstPU
+    FROM dtm_ka_v3_createddate C
+    WHERE C.clientid IN (18692)
+      AND C.isexpecteddropoff = False
+      AND NOT C.channel = 'WH - Shopee'
+      AND EXTRACT(DAY_OF_WEEK FROM C.orderdate) = 7
+      AND DATE(C.orderdate) BETWEEN DATE('2025-08-01') AND DATE('2025-09-30')
+    GROUP BY 1,2
+  )
+  SELECT
+  ND.Time,
+  --ND.Region,
+  ND.District,
+  ND.Volume_Created AS "vol",
+  ND.OntimeFirstPU AS "1stpu",
+  SD.Volume_Created AS "volsunday",
+  SD.OntimeFirstPU AS "1stsunday",
+ROUND(CAST(ND.OntimeFirstPU AS DOUBLE) / NULLIF(ND.Volume_Created, 0), 4) AS "%Ontime1stPU_Normal",
+ROUND(CAST(ND.OntimeSuccessPU AS DOUBLE) / NULLIF(ND.Volume_Created, 0), 4) AS "%OntimeSuccessPU_Normal",
+ROUND(CAST(COALESCE(SD.OntimeFirstPU, 0) AS DOUBLE) / NULLIF(COALESCE(SD.Volume_Created, 1), 0), 4) AS "%Ontime1stPU_Sunday"
+  --ROUND(cast(COALESCE(SD.LateFirstPU, 0) as double) / NULLIF(COALESCE(SD.Volume_Created, 1), 0), 4) AS "1stlateContribute_Sunday"
+FROM Normal_Details AS ND
+JOIN Normal_Total AS NT ON ND.Time = NT.Time
+LEFT JOIN Sunday_Details AS SD ON ND.Time = SD.Time AND ND.District = SD.District
+ORDER BY ND.Region ASC
+
+
+
