@@ -67,3 +67,48 @@ END AS OntimeFirstPUcheck
   where Province = ('Hà Nội')
   and Time = date('2025-11-03')
   --and ordercode in
+--------------------------------------------------------check số absolute----------------------------------------------
+WITH
+  Details AS (
+    SELECT
+      DATE(C.orderdate) AS Time,
+      C.ordercode,
+      c.fromwardcode AS Ward_id,
+      c.fromprovince AS Province,
+      CASE
+        WHEN endpicktime IS NOT NULL AND DATE(endpicktime) <= DATE(orderdate) THEN 1
+        WHEN firstupdatedpickeduptime IS NOT NULL 
+             AND DATE(firstupdatedpickeduptime) <= DATE(orderdate)
+             AND COALESCE(firstfailpicknote, '') != 'Nhân viên gặp sự cố' THEN 1
+        WHEN extract(hour from orderdate) < 18 
+             AND DATE(COALESCE(firstupdatedpickeduptime, endpicktime)) <= DATE(orderdate)
+             AND COALESCE(firstfailpicknote, '') != 'Nhân viên gặp sự cố' THEN 1
+        WHEN extract(hour from orderdate) >= 18 
+             AND DATE(COALESCE(firstupdatedpickeduptime, endpicktime)) <= DATE_ADD('day', 1, DATE(orderdate))
+             AND COALESCE(firstfailpicknote, '') != 'Nhân viên gặp sự cố' THEN 1
+        ELSE 0
+      END AS IsOntime,
+      firstupdatedpickeduptime,
+      secondupdatedpickeduptime,
+      firstfailpicknote,
+      lastfailpicknote,
+      endpicktime,
+      firstcreatedpickeduptime
+    FROM "ghn-reporting"."ka"."dtm_ka_v3_createddate" C
+    WHERE C.clientid IN (18692)
+      AND C.isexpecteddropoff = FALSE
+      AND NOT C.channel = 'WH - Shopee'
+      AND DATE(C.orderdate) BETWEEN CURRENT_DATE - INTERVAL '14' DAY AND CURRENT_DATE - INTERVAL '1' DAY
+      AND c.currentstatus != 'cancel'
+  )
+SELECT
+  Time,
+  COUNT(ordercode) AS TotalOrders,
+  SUM(IsOntime) AS OntimeOrders,
+  COUNT(ordercode) - SUM(IsOntime) AS LateOrders
+FROM Details
+WHERE 
+--Province = 'Hà Nội'
+   Time BETWEEN CURRENT_DATE - INTERVAL '10' DAY AND CURRENT_DATE - INTERVAL '1' DAY
+GROUP BY Time;
+
