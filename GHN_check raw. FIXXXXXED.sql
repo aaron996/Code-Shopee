@@ -46,6 +46,7 @@ END AS OntimeFirstPUcheck
       AND C.isexpecteddropoff = FALSE
       AND NOT C.channel = 'WH - Shopee'
       AND DATE(C.orderdate) BETWEEN CURRENT_DATE - INTERVAL '14' DAY AND CURRENT_DATE - INTERVAL '1' DAY
+      and c.currentstatus != 'cancel'
       --AND C.fromregionshortname = 'HNO'
       --AND LOWER(pickwh) LIKE 'bưu cục%'
     --GROUP BY 1, 2
