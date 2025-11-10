@@ -6,6 +6,9 @@ WITH
       c.fromwardcode AS Ward_id,
       c.fromprovince AS Province,
       c.fromdistrict as District,
+      c.pickwh as Hub,
+      case when
+      LOWER(c.pickwh) LIKE 'bưu cục%' then 'Vùng' else 'KHL/GXT'end as TypeKH,
 CASE
   -- Ưu tiên 1: endpicktime <= orderdate (Thành công ngay trong ngày D)
   WHEN endpicktime IS NOT NULL AND DATE(endpicktime) <= DATE(orderdate) THEN 'Ontime'
@@ -56,8 +59,10 @@ CASE
 SELECT
   Time,
   ordercode,
+  TypeKH,
   Province,
   District,
+  Hub,
   firstupdatedpickeduptime,
   firstfailpicknote,
   endpicktime,
@@ -68,10 +73,12 @@ SELECT
   --COUNT(ordercode) - SUM(IsOntime) AS LateOrders
 FROM Details
 WHERE 
---Province = 'Hà Nội' and
+Province = 'Hồ Chí Minh' and
+District = 'Thành Phố Thủ Đức' and
    --Time BETWEEN CURRENT_DATE - INTERVAL '17' DAY AND CURRENT_DATE - INTERVAL '1' DAY
-    Time BETWEEN CURRENT_DATE - INTERVAL '1' DAY and CURRENT_DATE
+    Time BETWEEN CURRENT_DATE - INTERVAL '8' DAY and CURRENT_DATE
 --GROUP BY Time;
+
 
 --------------------------------------------------------check số absolute----------------------------------------------
 WITH
@@ -81,6 +88,12 @@ WITH
       C.ordercode,
       c.fromwardcode AS Ward_id,
       c.fromprovince AS Province,
+      c.fromdistrict as District,
+      c.pickwh as Hub,
+      c.fromregionshortname,
+      case when 
+      LOWER(pickwh) LIKE 'bưu cục%' then 'Vùng' else 'KHL/GXT'
+      end as TypeKH,
 CASE
   -- Ưu tiên 1: endpicktime <= orderdate (Thành công ngay trong ngày D)
   WHEN endpicktime IS NOT NULL AND DATE(endpicktime) <= DATE(orderdate) THEN 1
@@ -130,6 +143,16 @@ CASE
   )
 SELECT
   Time,
+  Province,
+  District,
+  Hub,
+  TypeKH,
+  --IsOntime,
+  --firstupdatedpickeduptime,
+  --secondupdatedpickeduptime,
+  --firstfailpicknote,
+  --lastfailpicknote,
+  --endpicktime,  
   COUNT(ordercode) AS TotalOrders,
   SUM(IsOntime) AS OntimeOrders,
   COUNT(ordercode) - SUM(IsOntime) AS LateOrders
@@ -137,4 +160,4 @@ FROM Details
 WHERE 
 --Province = 'Hà Nội'
    Time BETWEEN CURRENT_DATE - INTERVAL '17' DAY AND CURRENT_DATE - INTERVAL '1' DAY
-GROUP BY Time;
+GROUP BY 1,2,3,4,5
