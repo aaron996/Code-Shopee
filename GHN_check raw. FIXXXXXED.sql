@@ -1,92 +1,119 @@
 WITH
   Details AS (
     SELECT
-      DATE(C.orderdate) AS Time --thay đổi sang Week/Month
-      ,C.ordercode ordercode
-      ,c.fromwardcode AS Ward_id
-      ,c.fromprovince as Province
-      --,COUNT(C.ordercode) AS Volume_Created
-      --,SUM(
-        ,CASE
-  -- Ưu tiên 1: endpicktime <= orderdate
+      date(C.orderdate) AS Time,
+      C.ordercode,
+      c.fromwardcode AS Ward_id,
+      c.fromprovince AS Province,
+      c.fromdistrict as District,
+CASE
+  -- Ưu tiên 1: endpicktime <= orderdate (Thành công ngay trong ngày D)
   WHEN endpicktime IS NOT NULL AND DATE(endpicktime) <= DATE(orderdate) THEN 'Ontime'
 
-  -- Ưu tiên 2: firstupdatedpickeduptime <= orderdate và không phải lỗi 'Nhân viên gặp sự cố'
-  WHEN firstupdatedpickeduptime IS NOT NULL 
-       AND DATE(firstupdatedpickeduptime) <= DATE(orderdate)
-       AND COALESCE(firstfailpicknote, '') != 'Nhân viên gặp sự cố'
-  THEN 'Ontime'
+  -- Ưu tiên 2: Giờ đặt < 18h (Deadline: cuối ngày D)
+  WHEN HOUR(orderdate) < 18 AND (
+    (
+      COALESCE(firstfailpicknote, '') = 'Nhân viên gặp sự cố' AND
+      secondupdatedpickeduptime IS NOT NULL AND DATE(secondupdatedpickeduptime) <= DATE(orderdate)
+    )
+    OR (
+      COALESCE(firstfailpicknote, '') != 'Nhân viên gặp sự cố' AND
+      COALESCE(firstupdatedpickeduptime, secondupdatedpickeduptime) IS NOT NULL AND
+      DATE(COALESCE(firstupdatedpickeduptime, secondupdatedpickeduptime)) <= DATE(orderdate)
+    )
+  ) THEN 'Ontime'
 
-  -- Ưu tiên 3: Giờ đặt < 18h và ngày lấy hàng <= ngày đặt
-  WHEN HOUR(orderdate) < 18 
-       AND DATE(COALESCE(firstupdatedpickeduptime, endpicktime)) <= DATE(orderdate)
-       AND COALESCE(firstfailpicknote, '') != 'Nhân viên gặp sự cố'
-  THEN 'Ontime'
-
-  -- Ưu tiên 4: Giờ đặt >= 18h và ngày lấy hàng <= ngày đặt + 1
-  WHEN HOUR(orderdate) >= 18 
-       AND DATE(COALESCE(firstupdatedpickeduptime, endpicktime)) <= DATE(orderdate + INTERVAL '1' DAY)
-       AND COALESCE(firstfailpicknote, '') != 'Nhân viên gặp sự cố'
-  THEN 'Ontime'
+  -- Ưu tiên 3: Giờ đặt >= 18h (Deadline: cuối ngày D + 1)
+  WHEN HOUR(orderdate) >= 18 AND (
+    (
+      COALESCE(firstfailpicknote, '') = 'Nhân viên gặp sự cố' AND
+      secondupdatedpickeduptime IS NOT NULL AND DATE(secondupdatedpickeduptime) <= DATE(orderdate + INTERVAL '1' DAY)
+    )
+    OR (
+      COALESCE(firstfailpicknote, '') != 'Nhân viên gặp sự cố' AND
+      COALESCE(firstupdatedpickeduptime, secondupdatedpickeduptime) IS NOT NULL AND
+      DATE(COALESCE(firstupdatedpickeduptime, secondupdatedpickeduptime)) <= DATE(orderdate + INTERVAL '1' DAY)
+    )
+  ) THEN 'Ontime'
 
   -- Các trường hợp còn lại
   ELSE 'Late'
-END AS OntimeFirstPUcheck
 
-
-
-       ,firstupdatedpickeduptime
-       ,secondupdatedpickeduptime
-       ,firstfailpicknote
-       ,lastfailpicknote
-       ,endpicktime
-       ,firstcreatedpickeduptime
+      END AS IsOntime,
+      firstupdatedpickeduptime,
+      secondupdatedpickeduptime,
+      firstfailpicknote,
+      lastfailpicknote,
+      endpicktime,
+      firstcreatedpickeduptime
     FROM "ghn-reporting"."ka"."dtm_ka_v3_createddate" C
     WHERE C.clientid IN (18692)
       AND C.isexpecteddropoff = FALSE
       AND NOT C.channel = 'WH - Shopee'
       AND DATE(C.orderdate) BETWEEN CURRENT_DATE - INTERVAL '14' DAY AND CURRENT_DATE - INTERVAL '1' DAY
-      and c.currentstatus != 'cancel'
-      --AND C.fromregionshortname = 'HNO'
-      --AND LOWER(pickwh) LIKE 'bưu cục%'
-    --GROUP BY 1, 2
+      AND c.currentstatus != 'cancel'
   )
-  SELECT
-    Time
-    ,ordercode
-    --,Ward_id
-    --,ROUND((AVG(OntimeFirstPU) / AVG(Volume_Created)),4) AS Ontime
-    ,OntimeFirstPUcheck
-    ,firstupdatedpickeduptime
-    ,secondupdatedpickeduptime
-    ,firstfailpicknote
-    ,endpicktime
-    ,lastfailpicknote
-    ,firstcreatedpickeduptime
-  FROM Details
-  where Province = ('Hà Nội')
-  and Time = date('2025-11-03')
-  --and ordercode in
+SELECT
+  Time,
+  ordercode,
+  Province,
+  District,
+  firstupdatedpickeduptime,
+  firstfailpicknote,
+  endpicktime,
+  firstcreatedpickeduptime,
+  IsOntime
+  --COUNT(ordercode) AS TotalOrders,
+  --SUM(IsOntime) AS OntimeOrders,
+  --COUNT(ordercode) - SUM(IsOntime) AS LateOrders
+FROM Details
+WHERE 
+--Province = 'Hà Nội' and
+   --Time BETWEEN CURRENT_DATE - INTERVAL '17' DAY AND CURRENT_DATE - INTERVAL '1' DAY
+    Time BETWEEN CURRENT_DATE - INTERVAL '1' DAY and CURRENT_DATE
+--GROUP BY Time;
+
 --------------------------------------------------------check số absolute----------------------------------------------
 WITH
   Details AS (
     SELECT
-      DATE(C.orderdate) AS Time,
+      date(C.orderdate) AS Time,
       C.ordercode,
       c.fromwardcode AS Ward_id,
       c.fromprovince AS Province,
-      CASE
-        WHEN endpicktime IS NOT NULL AND DATE(endpicktime) <= DATE(orderdate) THEN 1
-        WHEN firstupdatedpickeduptime IS NOT NULL 
-             AND DATE(firstupdatedpickeduptime) <= DATE(orderdate)
-             AND COALESCE(firstfailpicknote, '') != 'Nhân viên gặp sự cố' THEN 1
-        WHEN extract(hour from orderdate) < 18 
-             AND DATE(COALESCE(firstupdatedpickeduptime, endpicktime)) <= DATE(orderdate)
-             AND COALESCE(firstfailpicknote, '') != 'Nhân viên gặp sự cố' THEN 1
-        WHEN extract(hour from orderdate) >= 18 
-             AND DATE(COALESCE(firstupdatedpickeduptime, endpicktime)) <= DATE_ADD('day', 1, DATE(orderdate))
-             AND COALESCE(firstfailpicknote, '') != 'Nhân viên gặp sự cố' THEN 1
-        ELSE 0
+CASE
+  -- Ưu tiên 1: endpicktime <= orderdate (Thành công ngay trong ngày D)
+  WHEN endpicktime IS NOT NULL AND DATE(endpicktime) <= DATE(orderdate) THEN 1
+
+  -- Ưu tiên 2: Giờ đặt < 18h (Deadline: cuối ngày D)
+  WHEN HOUR(orderdate) < 18 AND (
+    (
+      COALESCE(firstfailpicknote, '') = 'Nhân viên gặp sự cố' AND
+      secondupdatedpickeduptime IS NOT NULL AND DATE(secondupdatedpickeduptime) <= DATE(orderdate)
+    )
+    OR (
+      COALESCE(firstfailpicknote, '') != 'Nhân viên gặp sự cố' AND
+      COALESCE(firstupdatedpickeduptime, secondupdatedpickeduptime) IS NOT NULL AND
+      DATE(COALESCE(firstupdatedpickeduptime, secondupdatedpickeduptime)) <= DATE(orderdate)
+    )
+  ) THEN 1
+
+  -- Ưu tiên 3: Giờ đặt >= 18h (Deadline: cuối ngày D + 1)
+  WHEN HOUR(orderdate) >= 18 AND (
+    (
+      COALESCE(firstfailpicknote, '') = 'Nhân viên gặp sự cố' AND
+      secondupdatedpickeduptime IS NOT NULL AND DATE(secondupdatedpickeduptime) <= DATE(orderdate + INTERVAL '1' DAY)
+    )
+    OR (
+      COALESCE(firstfailpicknote, '') != 'Nhân viên gặp sự cố' AND
+      COALESCE(firstupdatedpickeduptime, secondupdatedpickeduptime) IS NOT NULL AND
+      DATE(COALESCE(firstupdatedpickeduptime, secondupdatedpickeduptime)) <= DATE(orderdate + INTERVAL '1' DAY)
+    )
+  ) THEN 1
+
+  -- Các trường hợp còn lại
+  ELSE 0
+
       END AS IsOntime,
       firstupdatedpickeduptime,
       secondupdatedpickeduptime,
@@ -109,6 +136,5 @@ SELECT
 FROM Details
 WHERE 
 --Province = 'Hà Nội'
-   Time BETWEEN CURRENT_DATE - INTERVAL '10' DAY AND CURRENT_DATE - INTERVAL '1' DAY
+   Time BETWEEN CURRENT_DATE - INTERVAL '17' DAY AND CURRENT_DATE - INTERVAL '1' DAY
 GROUP BY Time;
-
