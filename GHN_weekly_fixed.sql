@@ -206,3 +206,161 @@ LEFT JOIN Penalty_Raw PR ON PR.Time = D.Time
 LEFT JOIN SundayAgg SA ON SA.Time = D.Time
 WHERE D.Time IN (42,43,44,45,46)
 ORDER BY Week;
+-------------------------------------------monthly----------------------------------
+WITH
+-- Chi tiết đơn theo tháng (giữ logic IsOntime và SuccessPU)
+Details AS (
+  SELECT
+    month(C.orderdate) AS Time,
+    C.ordercode,
+    CASE 
+      WHEN C.PickWH LIKE '%Ahamove%' THEN 'Ahamove'
+      WHEN C.PickWarehouseID IN (1297,1327) THEN 'KHL'
+      WHEN C.PickWarehouseID IN (
+        SELECT warehouse_id 
+        FROM "dw-ghn".datawarehouse.dim_warehouse 
+        WHERE department_name = 'Freight Operations Department'
+           OR warehouse_name LIKE '%Kho Chuyển Tiếp %'
+      ) THEN 'GXT'
+      ELSE 'BC'
+    END AS TypeKH,
+    CASE
+      WHEN C.endpicktime IS NOT NULL AND DATE(C.endpicktime) <= DATE(C.orderdate) THEN 1
+      WHEN (
+        (COALESCE(C.firstfailpicknote, '') = 'Nhân viên gặp sự cố'
+         AND C.secondupdatedpickeduptime IS NOT NULL
+         AND DATE(C.secondupdatedpickeduptime) <= DATE(C.orderdate))
+        OR
+        (COALESCE(C.firstfailpicknote, '') != 'Nhân viên gặp sự cố'
+         AND COALESCE(C.firstupdatedpickeduptime, C.secondupdatedpickeduptime) IS NOT NULL
+         AND DATE(COALESCE(C.firstupdatedpickeduptime, C.secondupdatedpickeduptime)) <= DATE(C.orderdate))
+      ) THEN 1
+      ELSE 0
+    END AS IsOntime,
+    CASE WHEN C.endpicktime IS NOT NULL AND DATE(C.endpicktime) <= DATE(C.orderdate) THEN 1 ELSE 0 END AS OntimeSuccessPU,
+    CASE WHEN C.endpicktime IS NOT NULL THEN 1 ELSE 0 END AS SuccessPU
+  FROM "ghn-reporting"."ka"."dtm_ka_v3_createddate" C
+  WHERE C.clientid IN (18692)
+    AND C.isexpecteddropoff = FALSE
+    AND C.channel <> 'WH - Shopee'
+    AND DATE(C.orderdate) BETWEEN DATE('2025-01-01') AND CURRENT_DATE - INTERVAL '1' DAY
+    AND C.currentstatus <> 'cancel'
+),
+
+DetailsAgg AS (
+  SELECT
+    Time,
+    COUNT(DISTINCT ordercode) AS TotalOrders,
+    sum(IsOntime)*1.0000 AS OntimeOrders,
+    sum(OntimeSuccessPU)*1.0000 AS OntimeSuccessPU,
+    sum(SuccessPU)*1.0000 AS SuccessPU
+  FROM Details
+  GROUP BY Time
+),
+
+event_days AS (
+  SELECT CAST(date_column AS DATE) AS Date_SLA
+  FROM (
+    VALUES 
+      '2025-01-01', '2025-01-25', '2025-01-26', '2025-01-27', '2025-01-28', '2025-01-29', '2025-01-30', '2025-01-31', '2025-02-01',
+      '2025-02-02', '2025-04-07', '2025-04-30', '2025-05-01', '2025-09-01', '2025-09-02',
+      '2025-10-10', '2025-10-11', '2025-10-12', '2025-11-11', '2025-11-12', '2025-11-13', '2025-12-12', '2025-12-13', '2025-12-14'
+  ) AS t(date_column)
+),
+
+Penalty_Raw AS (
+  SELECT
+    month(C.orderdate) AS Time,
+    COUNT(DISTINCT ordercode) AS Volume_Created,
+    COUNT(DISTINCT CASE
+      WHEN DATE(C.orderdate) = DATE(E.Date_SLA)
+           AND DATE(COALESCE(C.firstupdatedpickeduptime, C.endpicktime, CURRENT_DATE)) <= DATE(C.orderdate + INTERVAL '1' DAY)
+      THEN ordercode
+      WHEN DATE(COALESCE(C.firstupdatedpickeduptime, C.endpicktime, CURRENT_DATE)) <= DATE(C.orderdate)
+      THEN ordercode
+      ELSE NULL
+    END) AS OntimeFirstPU
+  FROM dtm_ka_v3_createddate C
+  LEFT JOIN event_days E ON DATE(C.orderdate) = E.Date_SLA
+  WHERE C.clientid IN (18692)
+    AND C.isexpecteddropoff = FALSE
+    AND C.channel <> 'WH - Shopee'
+    AND DATE(C.orderdate) BETWEEN DATE('2025-01-01') AND CURRENT_DATE - INTERVAL '1' DAY
+    AND NOT (C.currentstatus = 'cancel' AND DATE(C.canceltime) <= DATE(C.orderdate))
+  GROUP BY 1
+),
+
+SundayDetails AS (
+  SELECT
+    month(C.orderdate) AS Time,
+    C.ordercode,
+    CASE
+      WHEN C.endpicktime IS NOT NULL AND DATE(C.endpicktime) <= DATE(C.orderdate) THEN 1
+      WHEN (
+        (COALESCE(C.firstfailpicknote, '') = 'Nhân viên gặp sự cố'
+         AND C.secondupdatedpickeduptime IS NOT NULL
+         AND DATE(C.secondupdatedpickeduptime) <= DATE(C.orderdate))
+        OR
+        (COALESCE(C.firstfailpicknote, '') != 'Nhân viên gặp sự cố'
+         AND COALESCE(C.firstupdatedpickeduptime, C.secondupdatedpickeduptime) IS NOT NULL
+         AND DATE(COALESCE(C.firstupdatedpickeduptime, C.secondupdatedpickeduptime)) <= DATE(C.orderdate))
+      ) THEN 1
+      ELSE 0
+    END AS IsOntimeSunday
+  FROM "ghn-reporting"."ka"."dtm_ka_v3_createddate" C
+  WHERE C.clientid IN (18692)
+    AND C.isexpecteddropoff = FALSE
+    AND C.channel <> 'WH - Shopee'
+    AND DATE(C.orderdate) BETWEEN DATE('2025-01-01') AND CURRENT_DATE - INTERVAL '1' DAY
+    AND C.currentstatus <> 'cancel'
+    AND EXTRACT(DAY_OF_WEEK FROM C.orderdate) = 7
+),
+
+SundayAgg AS (
+  SELECT
+    Time,
+    COUNT(DISTINCT ordercode) AS TotalSundayOrders,
+    sum(IsOntimeSunday)*1.0000 AS OntimeOrdersSunday
+  FROM SundayDetails
+  GROUP BY Time
+)
+
+SELECT
+  DA.Time,
+  COALESCE(DA.TotalOrders, 0) AS TotalOrders,
+
+    CASE WHEN DA.TotalOrders > 0
+      THEN ROUND(DA.OntimeOrders / DA.TotalOrders, 4)
+      ELSE NULL
+    END  AS Ontime1st,
+
+
+    CASE WHEN PR.Volume_Created > 0
+      THEN ROUND(PR.OntimeFirstPU / PR.Volume_Created, 4)
+      ELSE NULL
+    END AS OntimePenalty,
+
+    CASE WHEN DA.TotalOrders > 0
+      THEN ROUND(DA.OntimeSuccessPU / DA.TotalOrders, 4)
+      ELSE NULL
+    END AS OntimeSuccessPU,
+
+
+    CASE WHEN DA.TotalOrders > 0
+      THEN ROUND(DA.SuccessPU  / DA.TotalOrders, 4)
+      ELSE NULL
+    END AS SuccessPU,
+
+
+    CASE WHEN SA.TotalSundayOrders > 0
+      THEN ROUND(SA.OntimeOrdersSunday / SA.TotalSundayOrders, 4)
+      ELSE NULl
+    END AS OntimeRateSunday
+
+FROM DetailsAgg DA
+LEFT JOIN Penalty_Raw PR ON PR.Time = DA.Time
+LEFT JOIN SundayAgg SA ON SA.Time = DA.Time
+WHERE DA.Time IN (10,11)
+ORDER BY DA.Time;
+------------------------------------break theo Region----------------------------------------------------------------
+
